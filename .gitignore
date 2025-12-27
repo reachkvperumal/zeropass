@@ -140,3 +140,4 @@ vite.config.ts.timestamp-*
 
 # docify-out folder
 docify-out/
+docs/
