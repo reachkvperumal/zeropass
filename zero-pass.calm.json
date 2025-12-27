@@ -1,0 +1,1116 @@
+{
+  "$schema": "https://calm.finos.org/release/1.1/meta/calm.json",
+  "unique-id": "zero-pass-webauthn-mfa",
+  "name": "ZeroPass Phishing-Resistant MFA with WebAuthn",
+  "description": "Phishing-resistant enrollment and authentication using WebAuthn/FIDO2 passkeys as a primary factor (passwordless) or as a strong second factor, with strict origin/RP ID binding, platform authenticator preference, support for roaming security keys, optional federation to an IdP (OIDC/SAML), and comprehensive audit logging.",
+  "metadata": {
+    "owner": "zeropass-team",
+    "environment": "prod",
+    "compliance": [
+      "WebAuthn",
+      "FIDO2",
+      "NIST-SP-800-63-4-AAL2",
+      "NIST-SP-800-63-4-AAL3"
+    ],
+    "rp-id": "login.kv.com",
+    "allowed-origins": ["https://login.kv.com"],
+    "user-guidance": {
+      "registration": "From Settings → Security, choose ‘Add passkey’. Approve the prompt using Face ID/Touch ID/Windows Hello or a security key PIN. Registration completes when the device confirms user verification.",
+      "sign-in": "Enter your identifier (or complete primary sign-in for MFA), then approve the passkey prompt using biometrics/PIN. Do not approve prompts on unexpected domains; passkeys only work on the legitimate origin."
+    },
+    "adrs": [
+      "instructions/ADR-001.md",
+      "instructions/ADR-002.md",
+      "instructions/ADR-005.md"
+    ],
+    "adrs-display": "instructions/ADR-001.md\ninstructions/ADR-002.md\ninstructions/ADR-005.md",
+    "adrs-index": {
+      "ADR-001": {
+        "path": "instructions/ADR-001.md",
+        "title": "Use Passkeys for Passwordless Authentication",
+        "status": "accepted"
+      },
+      "ADR-002": {
+        "path": "instructions/ADR-002.md",
+        "title": "Enforce TLS for All External Communication",
+        "status": "accepted"
+      },
+      "ADR-005": {
+        "path": "instructions/ADR-005.md",
+        "title": "Implementation of Phishing-Resistant MFA via WebAuthn",
+        "status": "proposed"
+      }
+    },
+    "implementation-checklist": [
+      "Pin RP ID and allowed origins per environment",
+      "Use unique server-stored challenges with strict verification",
+      "Set userVerification=required for registration and authentication",
+      "Store credential public keys and metadata securely linked to users",
+      "Capture enrollment/auth events and suspicious activity in audit logs",
+      "Rate-limit and segregate fallback factors (avoid SMS OTP as primary)"
+    ],
+    "implementation-checklist-display": "Pin RP ID and allowed origins per environment\nUse unique server-stored challenges with strict verification\nSet userVerification=required for registration and authentication\nStore credential public keys and metadata securely linked to users\nCapture enrollment/auth events and suspicious activity in audit logs\nRate-limit and segregate fallback factors (avoid SMS OTP as primary)"
+  },
+  "controls": {
+    "phishing-resistant-webauthn-policy": {
+      "description": "Baseline policy requiring strict WebAuthn origin/RP binding and user verification for phishing resistance.",
+      "requirements": [
+        {
+          "requirement-url": "https://zeropass.example/requirements/webauthn/phishing-resistant",
+          "config": {
+            "rpId": "login.kv.com",
+            "allowedOrigins": ["https://login.kv.com"],
+            "userVerification": "required",
+            "discoverableCredentials": "allowed",
+            "attestation": "privacy-preserving by default"
+          }
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "unique-id": "user",
+      "node-type": "actor",
+      "name": "User",
+      "description": "Human user enrolling and authenticating with passkeys and/or WebAuthn MFA.",
+      "interfaces": [
+        {
+          "unique-id": "user-client",
+          "channel": "web"
+        }
+      ],
+      "metadata": [
+        {
+          "owner": "end-user",
+          "environment": "prod",
+          "compliance": ["WebAuthn", "FIDO2"]
+        }
+      ]
+    },
+    {
+      "unique-id": "user-browser",
+      "node-type": "webclient",
+      "name": "UserBrowser",
+      "description": "Modern browser providing the WebAuthn API (navigator.credentials.create/get) and enforcing secure context/origin policies.",
+      "interfaces": [
+        {
+          "unique-id": "user-browser-webauthn-api",
+          "api": "WebAuthn",
+          "notes": "Represents the browser WebAuthn API surface used by the web-frontend."
+        },
+        {
+          "unique-id": "user-browser-to-web-frontend-url",
+          "url": "https://login.kv.com"
+        }
+      ],
+      "metadata": [
+        {
+          "owner": "end-user",
+          "environment": "prod",
+          "compliance": ["WebAuthn", "FIDO2"]
+        }
+      ],
+      "controls": {
+        "secure-context": {
+          "description": "WebAuthn usage requires a secure context and hardened session handling.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/client/secure-context",
+              "config": {
+                "secureContextRequired": true,
+                "thirdPartyContext": "restricted"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "platform-authenticator",
+      "node-type": "system",
+      "name": "PlatformAuthenticator",
+      "description": "Platform authenticator (Touch ID/Face ID/Windows Hello/Android) performing user verification and holding non-exportable private keys.",
+      "interfaces": [
+        {
+          "unique-id": "platform-authenticator-uv",
+          "capability": "user-verification",
+          "methods": ["biometric", "device-pin"]
+        }
+      ],
+      "metadata": [
+        {
+          "owner": "end-user",
+          "environment": "prod",
+          "compliance": ["WebAuthn", "FIDO2", "NIST-SP-800-63-4"]
+        }
+      ],
+      "controls": {
+        "key-protection": {
+          "description": "Private keys remain on-device and are protected by the platform security boundary.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/key-protection",
+              "config": {
+                "privateKeyExportable": false,
+                "hardwareBackedPreferred": true,
+                "userVerification": "required"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "roaming-security-key",
+      "node-type": "system",
+      "name": "RoamingSecurityKey",
+      "description": "Roaming FIDO2 security key (USB/NFC/BLE) for high-assurance users; performs user verification via PIN/biometrics (device-dependent).",
+      "interfaces": [
+        {
+          "unique-id": "roaming-security-key-uv",
+          "capability": "user-verification",
+          "methods": ["pin", "biometric-if-supported"]
+        }
+      ],
+      "metadata": [
+        {
+          "owner": "end-user",
+          "environment": "prod",
+          "compliance": ["FIDO2", "WebAuthn", "NIST-SP-800-63-4"]
+        }
+      ],
+      "controls": {
+        "hardware-backed-authenticator": {
+          "description": "Hardware-backed authenticator for higher assurance populations.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/hardware-backed",
+              "config": {
+                "privateKeyExportable": false,
+                "hardwareBacked": true,
+                "userVerification": "required"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "web-frontend",
+      "node-type": "webclient",
+      "name": "WebFrontend",
+      "description": "Web application/SPA that initiates WebAuthn ceremonies and exchanges results with the auth backend.",
+      "interfaces": [
+        {
+          "unique-id": "web-frontend-public-url",
+          "url": "https://login.kv.com"
+        },
+        {
+          "unique-id": "web-frontend-to-auth-backend",
+          "url": "https://login.kv.com/webauthn"
+        }
+      ],
+      "metadata": [
+        {
+          "owner": "zeropass-team",
+          "environment": "prod",
+          "compliance": ["WebAuthn", "OWASP-ASVS"]
+        }
+      ],
+      "controls": {
+        "https-hsts": {
+          "description": "Frontend is served only over HTTPS with HSTS to prevent downgrade and cookie theft.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/transport/hsts",
+              "config": {
+                "httpsOnly": true,
+                "hsts": true,
+                "includeSubDomains": true
+              }
+            }
+          ]
+        },
+        "origin-pinning": {
+          "description": "Frontend pins allowed origins and RP IDs to preserve WebAuthn origin binding.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/origin-pinning",
+              "config": {
+                "allowedOrigins": ["https://login.kv.com"],
+                "rpId": "login.kv.com"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "auth-backend",
+      "node-type": "service",
+      "name": "AuthBackend",
+      "description": "Issues registration/authentication options, verifies attestation/assertions, manages sessions/tokens, and records audit events.",
+      "interfaces": [
+        {
+          "unique-id": "auth-backend-api",
+          "url": "https://login.kv.com/api"
+        }
+      ],
+      "metadata": [
+        {
+          "owner": "zeropass-team",
+          "environment": "prod",
+          "compliance": ["WebAuthn", "FIDO2", "NIST-SP-800-63-4", "SOC2"]
+        }
+      ],
+      "controls": {
+        "webauthn-verification": {
+          "description": "Strict server-side verification of WebAuthn ceremonies.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/server-verification",
+              "config": {
+                "verifyChallenge": true,
+                "verifyOrigin": true,
+                "verifyRpIdHash": true,
+                "requireUserVerified": true,
+                "challengeTtlSeconds": 300,
+                "challengeOneTimeUse": true
+              }
+            }
+          ]
+        },
+        "abuse-prevention": {
+          "description": "Rate limiting and replay protection for enrollment and authentication endpoints.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/security/abuse-prevention",
+              "config": {
+                "rateLimiting": true,
+                "replayProtection": true,
+                "userEnumerationMinimized": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "identity-provider",
+      "node-type": "service",
+      "name": "IdentityProvider",
+      "description": "Optional identity provider that federates authentication via OIDC/SAML and may act as the WebAuthn relying party.",
+      "interfaces": [
+        {
+          "unique-id": "idp-oidc",
+          "url": "https://idp.kv.com/.well-known/openid-configuration"
+        },
+        {
+          "unique-id": "idp-saml",
+          "url": "https://idp.kv.com/saml/metadata"
+        }
+      ],
+      "metadata": [
+        {
+          "owner": "idp-team-or-vendor",
+          "environment": "prod",
+          "compliance": ["OIDC", "SAML2", "SOC2"]
+        }
+      ],
+      "controls": {
+        "federation-security": {
+          "description": "Federation requires strict issuer/audience validation and secure token handling.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/federation/oidc-saml",
+              "config": {
+                "oidc": {
+                  "pkceRequired": true,
+                  "issuerPinned": true,
+                  "audiencePinned": true
+                },
+                "saml": {
+                  "signedAssertionsRequired": true,
+                  "clockSkewSeconds": 120
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "credential-store",
+      "node-type": "database",
+      "name": "CredentialStore",
+      "description": "Stores WebAuthn credential public keys and metadata (credentialId, publicKey, signCount, userHandle, transports, AAGUID as applicable).",
+      "interfaces": [
+        {
+          "unique-id": "credential-store-db",
+          "host": "credential-store.internal",
+          "port": 5432
+        }
+      ],
+      "metadata": [
+        {
+          "owner": "zeropass-team",
+          "environment": "prod",
+          "compliance": ["WebAuthn", "SOC2"]
+        }
+      ],
+      "controls": {
+        "data-protection": {
+          "description": "Credential metadata is protected with encryption and least-privilege access.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/data/encryption",
+              "config": {
+                "encryptionAtRest": true,
+                "keyManagement": "kms-or-hsm",
+                "leastPrivilege": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "audit-log-store",
+      "node-type": "database",
+      "name": "AuditLogStore",
+      "description": "Stores enrollment, authentication, and risk events for monitoring, forensics, and compliance.",
+      "interfaces": [
+        {
+          "unique-id": "audit-log-store-endpoint",
+          "host": "audit-log.internal",
+          "port": 443
+        }
+      ],
+      "metadata": [
+        {
+          "owner": "security-team",
+          "environment": "prod",
+          "compliance": ["SOC2", "ISO-27001"]
+        }
+      ],
+      "controls": {
+        "tamper-evident-logging": {
+          "description": "Audit logs are append-only and tamper-evident with restricted access.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/logging/tamper-evident",
+              "config": {
+                "appendOnly": true,
+                "tamperEvident": true,
+                "restrictedRead": true,
+                "retentionDays": 365
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "relationships": [
+    {
+      "unique-id": "user-browser-to-web-frontend",
+      "description": "Browser loads the web frontend over HTTPS on the legitimate origin.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "user-browser",
+            "interfaces": ["user-browser-to-web-frontend-url"]
+          },
+          "destination": {
+            "node": "web-frontend",
+            "interfaces": ["web-frontend-public-url"]
+          }
+        }
+      },
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "sensitivity": "moderate",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "tls-and-hsts": {
+          "description": "Browser to frontend transport is protected by HTTPS and HSTS.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/transport/tls",
+              "config": {
+                "tlsRequired": true,
+                "hsts": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "end-user-to-web-frontend",
+      "description": "User connects to the login UI on the legitimate origin to enroll or authenticate.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "user",
+            "interfaces": ["user-client"]
+          },
+          "destination": {
+            "node": "web-frontend",
+            "interfaces": ["web-frontend-public-url"]
+          }
+        }
+      },
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "sensitivity": "moderate",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "tls-and-hsts": {
+          "description": "User to frontend transport is protected by HTTPS and HSTS.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/transport/tls",
+              "config": {
+                "tlsRequired": true,
+                "hsts": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "end-user-uses-web-frontend",
+      "description": "User accesses the login UI to enroll or authenticate with passkeys/WebAuthn MFA.",
+      "relationship-type": {
+        "interacts": {
+          "actor": "user",
+          "nodes": ["web-frontend"]
+        }
+      },
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "sensitivity": "moderate",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "tls-and-hsts": {
+          "description": "User to frontend transport is protected by HTTPS and HSTS.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/transport/tls",
+              "config": {
+                "tlsRequired": true,
+                "hsts": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "web-frontend-to-auth-backend-registration-options",
+      "description": "Frontend requests WebAuthn registration options (challenge and creation options) for the user.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "web-frontend",
+            "interfaces": ["web-frontend-to-auth-backend"]
+          },
+          "destination": {
+            "node": "auth-backend",
+            "interfaces": ["auth-backend-api"]
+          }
+        }
+      },
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "sensitivity": "moderate",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "request-hardening": {
+          "description": "Options endpoints enforce CSRF protections, rate limits, and origin/RP pinning.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/api/request-hardening",
+              "config": {
+                "csrfProtection": true,
+                "rateLimiting": true,
+                "allowedOriginsPinned": true,
+                "noStoreResponses": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "user-browser-to-platform-authenticator-registration",
+      "description": "Browser invokes navigator.credentials.create; authenticator performs user verification and creates an origin-bound key pair (private key stays on device).",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "user-browser",
+            "interfaces": ["user-browser-webauthn-api"]
+          },
+          "destination": {
+            "node": "platform-authenticator",
+            "interfaces": ["platform-authenticator-uv"]
+          }
+        }
+      },
+      "metadata": [
+        {
+          "sensitivity": "high",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "uv-required": {
+          "description": "User verification is required to achieve phishing-resistant assurance.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/user-verification",
+              "config": {
+                "userVerification": "required",
+                "privateKeyExportable": false,
+                "rpIdBinding": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "user-browser-to-roaming-security-key-registration",
+      "description": "Browser invokes navigator.credentials.create using a roaming security key for high-assurance users.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "user-browser",
+            "interfaces": ["user-browser-webauthn-api"]
+          },
+          "destination": {
+            "node": "roaming-security-key",
+            "interfaces": ["roaming-security-key-uv"]
+          }
+        }
+      },
+      "metadata": [
+        {
+          "sensitivity": "high",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "uv-required": {
+          "description": "User verification is required for roaming key-based enrollment.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/user-verification",
+              "config": {
+                "userVerification": "required",
+                "privateKeyExportable": false,
+                "rpIdBinding": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "web-frontend-to-auth-backend-registration-complete",
+      "description": "Frontend submits attestation response to complete registration; backend verifies challenge/origin/RP ID and userVerified.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "web-frontend",
+            "interfaces": ["web-frontend-to-auth-backend"]
+          },
+          "destination": {
+            "node": "auth-backend",
+            "interfaces": ["auth-backend-api"]
+          }
+        }
+      },
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "sensitivity": "high",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "assertion-attestation-protection": {
+          "description": "Attestation payload is protected in transit and validated strictly server-side.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/attestation-validation",
+              "config": {
+                "tlsRequired": true,
+                "verifyChallenge": true,
+                "verifyOrigin": true,
+                "verifyRpIdHash": true,
+                "requireUserVerified": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "auth-backend-persists-credential",
+      "description": "Backend stores credential public key and metadata linked to the user account.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "auth-backend",
+            "interfaces": ["auth-backend-api"]
+          },
+          "destination": {
+            "node": "credential-store",
+            "interfaces": ["credential-store-db"]
+          }
+        }
+      },
+      "protocol": "mTLS",
+      "metadata": [
+        {
+          "sensitivity": "high",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "protected-data-path": {
+          "description": "Credential persistence uses encrypted transport and least-privilege DB access.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/data/protected-path",
+              "config": {
+                "mTLS": true,
+                "leastPrivilege": true,
+                "auditedAccess": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "auth-backend-writes-registration-audit",
+      "description": "Backend writes a registration audit event (success/failure and risk signals).",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "auth-backend",
+            "interfaces": ["auth-backend-api"]
+          },
+          "destination": {
+            "node": "audit-log-store",
+            "interfaces": ["audit-log-store-endpoint"]
+          }
+        }
+      },
+      "protocol": "mTLS",
+      "metadata": [
+        {
+          "sensitivity": "moderate",
+          "criticality": "medium"
+        }
+      ],
+      "controls": {
+        "audit-integrity": {
+          "description": "Audit events are transmitted securely and stored append-only/tamper-evident.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/logging/secure-ingest",
+              "config": {
+                "mTLS": true,
+                "appendOnly": true,
+                "tamperEvident": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "web-frontend-to-auth-backend-authentication-options",
+      "description": "Frontend requests WebAuthn authentication options (challenge + request options) for passwordless sign-in or MFA.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "web-frontend",
+            "interfaces": ["web-frontend-to-auth-backend"]
+          },
+          "destination": {
+            "node": "auth-backend",
+            "interfaces": ["auth-backend-api"]
+          }
+        }
+      },
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "sensitivity": "moderate",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "request-hardening": {
+          "description": "Authentication options are issued with fresh challenges and hardened against abuse.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/assertion-options",
+              "config": {
+                "freshChallenge": true,
+                "challengeTtlSeconds": 300,
+                "rateLimiting": true,
+                "noStoreResponses": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "user-browser-to-platform-authenticator-authentication",
+      "description": "Browser invokes navigator.credentials.get; authenticator performs user verification and signs the challenge for the bound RP ID.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "user-browser",
+            "interfaces": ["user-browser-webauthn-api"]
+          },
+          "destination": {
+            "node": "platform-authenticator",
+            "interfaces": ["platform-authenticator-uv"]
+          }
+        }
+      },
+      "metadata": [
+        {
+          "sensitivity": "high",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "uv-required": {
+          "description": "Authentication requires user verification to meet phishing-resistant requirements.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/user-verification",
+              "config": {
+                "userVerification": "required",
+                "rpIdBinding": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "user-browser-to-roaming-security-key-authentication",
+      "description": "Browser invokes navigator.credentials.get using a roaming security key for high-assurance users.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "user-browser",
+            "interfaces": ["user-browser-webauthn-api"]
+          },
+          "destination": {
+            "node": "roaming-security-key",
+            "interfaces": ["roaming-security-key-uv"]
+          }
+        }
+      },
+      "metadata": [
+        {
+          "sensitivity": "high",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "uv-required": {
+          "description": "Roaming key authentication requires user verification and origin/RP binding.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/user-verification",
+              "config": {
+                "userVerification": "required",
+                "rpIdBinding": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "web-frontend-to-auth-backend-authentication-complete",
+      "description": "Frontend submits assertion response; backend validates signature, challenge, origin, RP ID, and userVerified; then creates a session/tokens.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "web-frontend",
+            "interfaces": ["web-frontend-to-auth-backend"]
+          },
+          "destination": {
+            "node": "auth-backend",
+            "interfaces": ["auth-backend-api"]
+          }
+        }
+      },
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "sensitivity": "high",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "assertion-protection": {
+          "description": "Assertion payload is protected in transit and validated strictly; signCount is checked when available.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/assertion-validation",
+              "config": {
+                "tlsRequired": true,
+                "verifySignature": true,
+                "verifyChallenge": true,
+                "verifyOrigin": true,
+                "verifyRpIdHash": true,
+                "requireUserVerified": true,
+                "signCountCheck": "enforce-when-supported"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "auth-backend-writes-authentication-audit",
+      "description": "Backend writes an authentication audit event (success/failure and risk evaluation).",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "auth-backend",
+            "interfaces": ["auth-backend-api"]
+          },
+          "destination": {
+            "node": "audit-log-store",
+            "interfaces": ["audit-log-store-endpoint"]
+          }
+        }
+      },
+      "protocol": "mTLS",
+      "metadata": [
+        {
+          "sensitivity": "moderate",
+          "criticality": "medium"
+        }
+      ],
+      "controls": {
+        "audit-integrity": {
+          "description": "Authentication audit events are securely ingested and stored tamper-evidently.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/logging/secure-ingest",
+              "config": {
+                "mTLS": true,
+                "appendOnly": true,
+                "tamperEvident": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "auth-backend-federates-to-idp",
+      "description": "Optional federation of authentication results to an IdP via OIDC authorization code (PKCE) and/or SAML assertions.",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "auth-backend",
+            "interfaces": ["auth-backend-api"]
+          },
+          "destination": {
+            "node": "identity-provider",
+            "interfaces": ["idp-oidc", "idp-saml"]
+          }
+        }
+      },
+      "protocol": "HTTPS",
+      "metadata": [
+        {
+          "sensitivity": "high",
+          "criticality": "high"
+        }
+      ],
+      "controls": {
+        "federation-controls": {
+          "description": "Federation enforces PKCE, issuer/audience pinning, and signed assertion validation.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/federation/secure",
+              "config": {
+                "oidc": {
+                  "pkceRequired": true,
+                  "issuerPinned": true,
+                  "audiencePinned": true
+                },
+                "saml": {
+                  "signedAssertionsRequired": true
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "unique-id": "webauthn-registration-flow",
+      "name": "WebAuthn Registration (Enrollment)",
+      "description": "Phishing-resistant enrollment using the WebAuthn registration ceremony with strict origin/RP ID binding and user verification.",
+      "requirement-url": "https://zeropass.example/requirements/flows/webauthn-registration",
+      "transitions": [
+        {
+          "relationship-unique-id": "user-browser-to-web-frontend",
+          "sequence-number": 1,
+          "description": "User initiates passkey enrollment on the legitimate origin.",
+          "direction": "source-to-destination"
+        },
+        {
+          "relationship-unique-id": "web-frontend-to-auth-backend-registration-options",
+          "sequence-number": 2,
+          "description": "Frontend requests registration options and receives a fresh challenge and creation options.",
+          "direction": "source-to-destination"
+        },
+        {
+          "relationship-unique-id": "user-browser-to-platform-authenticator-registration",
+          "sequence-number": 3,
+          "description": "Browser creates a credential with platform authenticator (preferred) after user verification.",
+          "direction": "source-to-destination"
+        },
+        {
+          "relationship-unique-id": "web-frontend-to-auth-backend-registration-complete",
+          "sequence-number": 4,
+          "description": "Frontend submits attestation and the backend validates and completes registration.",
+          "direction": "source-to-destination"
+        },
+        {
+          "relationship-unique-id": "auth-backend-persists-credential",
+          "sequence-number": 5,
+          "description": "Backend persists credential public key and metadata.",
+          "direction": "source-to-destination"
+        },
+        {
+          "relationship-unique-id": "auth-backend-writes-registration-audit",
+          "sequence-number": 6,
+          "description": "Backend writes a registration audit event.",
+          "direction": "source-to-destination"
+        }
+      ],
+      "metadata": {
+        "owner": "zeropass-team",
+        "environment": "prod",
+        "compliance": ["WebAuthn", "FIDO2"]
+      },
+      "controls": {
+        "registration-uv-required": {
+          "description": "Enrollment requires user verification and strict origin/RP ID binding.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/registration-policy",
+              "config": {
+                "userVerification": "required",
+                "rpId": "login.kv.com",
+                "allowedOrigins": ["https://login.kv.com"]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "webauthn-authentication-flow",
+      "name": "WebAuthn Authentication (Passwordless or MFA)",
+      "description": "Phishing-resistant authentication using the WebAuthn assertion ceremony with strict server-side verification and audit logging; optionally federated via OIDC/SAML.",
+      "requirement-url": "https://zeropass.example/requirements/flows/webauthn-authentication",
+      "transitions": [
+        {
+          "relationship-unique-id": "user-browser-to-web-frontend",
+          "sequence-number": 1,
+          "description": "User initiates sign-in on the legitimate origin.",
+          "direction": "source-to-destination"
+        },
+        {
+          "relationship-unique-id": "web-frontend-to-auth-backend-authentication-options",
+          "sequence-number": 2,
+          "description": "Frontend requests assertion options and receives a fresh challenge and request options.",
+          "direction": "source-to-destination"
+        },
+        {
+          "relationship-unique-id": "user-browser-to-platform-authenticator-authentication",
+          "sequence-number": 3,
+          "description": "Browser obtains an assertion from the authenticator after user verification.",
+          "direction": "source-to-destination"
+        },
+        {
+          "relationship-unique-id": "web-frontend-to-auth-backend-authentication-complete",
+          "sequence-number": 4,
+          "description": "Frontend submits assertion and the backend validates it and establishes session or tokens.",
+          "direction": "source-to-destination"
+        },
+        {
+          "relationship-unique-id": "auth-backend-writes-authentication-audit",
+          "sequence-number": 5,
+          "description": "Backend writes an authentication audit event and any risk evaluation result.",
+          "direction": "source-to-destination"
+        },
+        {
+          "relationship-unique-id": "auth-backend-federates-to-idp",
+          "sequence-number": 6,
+          "description": "Optional: backend federates the authentication result to an IdP for broader SSO via OIDC/SAML.",
+          "direction": "source-to-destination"
+        }
+      ],
+      "metadata": {
+        "owner": "zeropass-team",
+        "environment": "prod",
+        "compliance": ["WebAuthn", "FIDO2", "NIST-SP-800-63-4"]
+      },
+      "controls": {
+        "authentication-uv-required": {
+          "description": "Authentication requires user verification and strict assertion validation.",
+          "requirements": [
+            {
+              "requirement-url": "https://zeropass.example/requirements/webauthn/authentication-policy",
+              "config": {
+                "userVerification": "required",
+                "verifySignature": true,
+                "verifyOrigin": true,
+                "verifyRpIdHash": true
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
